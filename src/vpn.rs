@@ -25,7 +25,8 @@ struct VpnAccess {
     access_type: String,
     location_type: String,
     can_access: bool,
-    server: Option<VpnServer>,
+    assigned: Option<VpnServer>,
+    servers: Vec<VpnServer>,
 }
 
 async fn get_vpn_connections() -> Result<Vec<VpnAccess>, String> {
@@ -49,6 +50,13 @@ async fn get_vpn_connections() -> Result<Vec<VpnAccess>, String> {
             Ok(json_value) => {
                 if let Some(data) = json_value.get("data") {
                     let assigned = data.get("assigned");
+                    let mut access = VpnAccess {
+                        access_type: access_type.to_string(),
+                        location_type: String::new(),
+                        can_access: false,
+                        assigned: None,
+                        servers: Vec::new(),
+                    };
 
                     if let Some(server_value) = assigned {
                         if !server_value.is_null() {
@@ -73,27 +81,55 @@ async fn get_vpn_connections() -> Result<Vec<VpnAccess>, String> {
                                 .to_string(),
                             };
 
-                            let location_type = server_value
+                            access.location_type = server_value
                             .get("location_type_friendly")
                             .and_then(|v| v.as_str())
                             .unwrap_or("Unknown")
                             .to_string();
 
-                            connections.push(VpnAccess {
-                                access_type: access_type.to_string(),
-                                             location_type,
-                                             can_access: true,
-                                             server: Some(server),
-                            });
-                        } else {
-                            connections.push(VpnAccess {
-                                access_type: access_type.to_string(),
-                                             location_type: String::new(),
-                                             can_access: false,
-                                             server: None,
-                            });
+                            access.can_access = true;
+                            access.assigned = Some(server.clone());
+                            access.servers.push(server);
                         }
                     }
+
+                    if let Some(options) = data.get("options") {
+                        if let Some(options_obj) = options.as_object() {
+                            for (_loc_type, loc_groups) in options_obj {
+                                if let Some(loc_groups_obj) = loc_groups.as_object() {
+                                    for (_loc_code, group) in loc_groups_obj {
+                                        if let Some(servers_obj) = group.get("servers").and_then(|s| s.as_object()) {
+                                            for (_server_id, server_value) in servers_obj {
+                                                let server = VpnServer {
+                                                    id: server_value
+                                                    .get("id")
+                                                    .and_then(|v| v.as_i64())
+                                                    .unwrap_or(0),
+                                                    friendly_name: server_value
+                                                    .get("friendly_name")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("Unknown")
+                                                    .to_string(),
+                                                    current_clients: server_value
+                                                    .get("current_clients")
+                                                    .and_then(|v| v.as_i64())
+                                                    .unwrap_or(0),
+                                                    location: server_value
+                                                    .get("location")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("Unknown")
+                                                    .to_string(),
+                                                };
+                                                access.servers.push(server);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    connections.push(access);
                 }
             }
             Err(err) => {
@@ -214,44 +250,57 @@ pub async fn run_vpn(is_starting_point: bool) {
         std::process::exit(1);
     }
 
-    // Display available connections
-    println!("\n{BCYAN}Available VPN Connections:{RESET}");
-    for (idx, conn) in filtered.iter().enumerate() {
-        if let Some(server) = &conn.server {
-            println!("{}. {} - {} ({} users)",
-                     idx + 1,
-                     conn.location_type,
-                     server.friendly_name,
-                     server.current_clients
-            );
+    // Build flat list of all available servers
+    let mut all_servers: Vec<(String, VpnServer)> = Vec::new();
+    for conn in &filtered {
+        for server in &conn.servers {
+            all_servers.push((conn.access_type.clone(), server.clone()));
         }
     }
 
+    if all_servers.is_empty() {
+        eprintln!("\x1B[31mNo VPN servers available.\x1B[0m");
+        std::process::exit(1);
+    }
+
+    // Display available connections
+    println!("\n{BCYAN}Available VPN Connections:{RESET}");
+    for (idx, (access_type, server)) in all_servers.iter().enumerate() {
+        let type_label = match access_type.as_str() {
+            "lab" => "Machines",
+            "starting_point" => "Starting Point",
+            "fortresses" => "Fortress",
+            _ => access_type,
+        };
+        println!(
+            "{}. [{}] {} - {} ({} users)",
+                 idx + 1,
+                 type_label,
+                 server.location,
+                 server.friendly_name,
+                 server.current_clients
+        );
+    }
+
     // Select connection
-    let selected = if filtered.len() == 1 {
+    let (_, selected_server) = if all_servers.len() == 1 {
         println!("\n{BGREEN}Auto-selecting the only available server.{RESET}");
-        filtered[0].clone()
+        all_servers[0].clone()
     } else {
-        print!("\nSelect VPN (1-{}): ", filtered.len());
+        print!("\nSelect VPN (1-{}): ", all_servers.len());
         io::stdout().flush().expect("Flush failed!");
         let mut input = String::new();
         io::stdin().read_line(&mut input).expect("Failed to read line");
 
         let choice: usize = input.trim().parse().unwrap_or(1);
-        if choice < 1 || choice > filtered.len() {
+        if choice < 1 || choice > all_servers.len() {
             eprintln!("Invalid selection");
             std::process::exit(1);
         }
-        filtered[choice - 1].clone()
+        all_servers[choice - 1].clone()
     };
 
-    let server = match &selected.server {
-        Some(s) => s.clone(),
-        None => {
-            eprintln!("\x1B[31mNo server assigned.\x1B[0m");
-            std::process::exit(1);
-        }
-    };
+    let server = selected_server;
 
     // Ask for TCP/UDP
     let mut vpn_tcp_flag = 0; // 0 = UDP, 1 = TCP

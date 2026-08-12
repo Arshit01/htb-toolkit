@@ -294,7 +294,11 @@ pub async fn htb_machines_to_flypie<T: CommonTrait>(
     for machine in machine_list.iter() {
         let machine_name = machine.get_name().split_once(' ').unwrap().1;
         let machine_avatar = machine.get_avatar().to_string();
-        let avatar_url = format!("https://htb-mp-prod-public-storage.s3.eu-central-1.amazonaws.com{machine_avatar}");
+        let avatar_url = if machine_avatar.starts_with("http://") || machine_avatar.starts_with("https://") {
+            machine_avatar
+        } else {
+            format!("https://htb-mp-prod-public-storage.s3.eu-central-1.amazonaws.com{machine_avatar}")
+        };
         let avatar_filename = format!(
             "{avatar_dir}/{machine_name}.png"
         );
