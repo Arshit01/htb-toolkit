@@ -1,0 +1,44 @@
+name: Build HTB Toolkit
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on Ubuntu
+    runs-on: ubuntu-latest
+
+    env:
+      APP_NAME: htb-toolkit
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: |
+          cargo build --release --locked
+
+      - name: Prepare binary
+        run: |
+          mkdir -p dist
+          cp "target/release/$APP_NAME" "dist/$APP_NAME"
+          chmod +x "dist/$APP_NAME"
+
+      - name: Show binary
+        run: |
+          ls -lh dist/htb-toolkit
+          file dist/htb-toolkit
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: htb-toolkit-linux
+          path: dist/htb-toolkit
+          if-no-files-found: error
