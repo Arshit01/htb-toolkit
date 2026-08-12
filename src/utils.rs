@@ -24,6 +24,29 @@ pub fn check_root() {
     }
 }
 
+pub fn is_command_available(cmd: &str) -> bool {
+    Command::new(cmd)
+    .arg("--help")
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status()
+    .is_ok()
+}
+
+pub fn has_sudo_privilege() -> bool {
+    if !is_command_available("sudo") {
+        return false;
+    }
+    Command::new("sudo")
+    .arg("-n")
+    .arg("true")
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status()
+    .map(|s| s.success())
+    .unwrap_or(false)
+}
+
 pub fn change_shell(machine_info: &mut PlayingMachine, user_info: &mut PlayingUser) {
     let result = std::env::var("SHELL").unwrap_or_default();
     let mut file_bak = String::new();
@@ -36,11 +59,11 @@ pub fn change_shell(machine_info: &mut PlayingMachine, user_info: &mut PlayingUs
         file = format!("{}/.bashrc", std::env::var("HOME").unwrap_or_default());
         prompt = format!(
             "PS1=\"\\e[32m\\]┌──[Target:{}🚀🌐IP:{}🔥\\e[34m\\]Attacker:{}📡IP:{}\\e[32m\\]🏅Prize:{} points]\\n└──╼[👾]\\\\[\\e[36m\\]\\$(pwd) $ \\[\\e[0m\\]\"",
-            machine_info.machine.name,
-            machine_info.ip,
-            user_info.user.name,
-            get_interface_ip("tun0").expect("Error on getting tun0 IP address"),
-            machine_info.machine.points
+                         machine_info.machine.name,
+                         machine_info.ip,
+                         user_info.user.name,
+                         get_interface_ip("tun0").expect("Error on getting tun0 IP address"),
+                         machine_info.machine.points
         );
         prompt_field = "PS1=.*";
     } else if result.contains("fish") {
@@ -48,22 +71,22 @@ pub fn change_shell(machine_info: &mut PlayingMachine, user_info: &mut PlayingUs
         file = format!("{}/.config/fish/functions/fish_prompt.fish", std::env::var("HOME").unwrap_or_default());
         prompt = format!(
             r#"function fish_prompt
-    set_color 00ff00
-    echo -n "┌──[Target:{}🚀🌐IP:{}"
-    set_color ff00d7
-    echo -n "🔥Attacker:{}📡IP:{}"
-    set_color 00ff00
-    echo "🏅Prize:{} points]"
-    set_color 00ff00
-    echo -n "└──╼[👾]"
-    set_color 00ffff
-    echo (pwd) '$' (set_color normal)
-end"#,
-            machine_info.machine.name,
-            machine_info.ip,
-            user_info.user.name,
-            get_interface_ip("tun0").expect("Error on getting tun0 IP address"),
-            machine_info.machine.points
+            set_color 00ff00
+            echo -n "┌──[Target:{}🚀🌐IP:{}"
+            set_color ff00d7
+            echo -n "🔥Attacker:{}📡IP:{}"
+            set_color 00ff00
+            echo "🏅Prize:{} points]"
+            set_color 00ff00
+            echo -n "└──╼[👾]"
+            set_color 00ffff
+            echo (pwd) '$' (set_color normal)
+        end"#,
+        machine_info.machine.name,
+        machine_info.ip,
+        user_info.user.name,
+        get_interface_ip("tun0").expect("Error on getting tun0 IP address"),
+                         machine_info.machine.points
         );
     } else if result.contains("zsh") {
         file_bak = format!("{}/.zshrc.htb.bak", std::env::var("HOME").unwrap_or_default());
@@ -74,7 +97,7 @@ end"#,
             machine_info.ip,
             user_info.user.name,
             get_interface_ip("tun0").expect("Error on getting tun0 IP address"),
-            machine_info.machine.points
+                         machine_info.machine.points
         );
         prompt_field = "PROMPT=.*";
     }
@@ -82,7 +105,7 @@ end"#,
     if !std::path::Path::new(&file_bak).exists() {
         std::fs::copy(&file, &file_bak).unwrap_or_default();
     }
-    
+
     if result.contains("bash") || result.contains("zsh") {
         let file_content = std::fs::read_to_string(&file).unwrap_or_default();
         let regex = Regex::new(prompt_field).unwrap();
@@ -141,14 +164,14 @@ pub fn get_interface_ip(interface_name: &str) -> Option<String> {
     if let Some(interface) = interfaces.into_iter().find(|iface| iface.name == interface_name) {
         // Iterate through the IP addresses of the interface
         for addr in &interface.ips {
-            if let IpAddr::V4(ipv4) = addr.ip() { 
+            if let IpAddr::V4(ipv4) = addr.ip() {
                 return Some(ipv4.to_string())
             }
         }
     } else {
         println!("Interface not found: {interface_name}");
     }
-    
+
     None // Return None if interface not found or IP not found
 }
 
@@ -157,10 +180,10 @@ pub fn print_banner() -> Result<(), Box<dyn std::error::Error>> {
 
     // Decode using base64
     let mut child = Command::new("base64")
-        .arg("-d")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
+    .arg("-d")
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .spawn()?;
 
     if let Some(ref mut stdin) = child.stdin {
         stdin.write_all(encoded.as_bytes())?;
@@ -169,9 +192,9 @@ pub fn print_banner() -> Result<(), Box<dyn std::error::Error>> {
 
     // Decompress using gunzip
     let mut gunzip_child = Command::new("gunzip")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .spawn()?;
 
     if let Some(ref mut stdin) = gunzip_child.stdin {
         stdin.write_all(&output.stdout)?;
@@ -180,7 +203,7 @@ pub fn print_banner() -> Result<(), Box<dyn std::error::Error>> {
 
     if gunzip_output.status.success() {
         let decompressed = String::from_utf8_lossy(&gunzip_output.stdout).into_owned().replace("\\x1b", "\x1b"); // .replace is needed to apply the colors on the banner string
-        
+
         let mut stdout = io::stdout();
         writeln!(stdout, "{decompressed}")?;
     } else {
@@ -312,28 +335,28 @@ pub async fn htb_machines_to_flypie<T: CommonTrait>(
 
     // Return Vec<Value> instead of formatted string
     machine_list
-        .iter()
-        .zip(avatar_filenames.iter())
-        .map(|(machine, avatar_filename)| {
-            let machine_name = machine.get_name().split_once(' ').unwrap().1;
-            let icon_filename = Path::new(avatar_filename)
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            let machine_command = format!("{terminal} 'htb-toolkit -m {machine_name}'");
-            json!({
-                "name": machine_name,
-                "icon": icon_filename, // kando needs only the filename, not the entire path
-                "iconTheme": "avatar",
-                "type": "command",
-                "data": {
-                    "command": machine_command
-                },
-                "angle": -1
-            })
+    .iter()
+    .zip(avatar_filenames.iter())
+    .map(|(machine, avatar_filename)| {
+        let machine_name = machine.get_name().split_once(' ').unwrap().1;
+        let icon_filename = Path::new(avatar_filename)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+        let machine_command = format!("{terminal} 'htb-toolkit -m {machine_name}'");
+        json!({
+            "name": machine_name,
+            "icon": icon_filename, // kando needs only the filename, not the entire path
+            "iconTheme": "avatar",
+            "type": "command",
+            "data": {
+                "command": machine_command
+            },
+            "angle": -1
         })
-        .collect()
+    })
+    .collect()
 }
 
 pub fn add_hosts(machine_info: &PlayingMachine) -> Result<(), Box<dyn std::error::Error>> {
@@ -361,10 +384,13 @@ pub fn add_hosts(machine_info: &PlayingMachine) -> Result<(), Box<dyn std::error
                 let current_content = fs::read_to_string(hosts_path).unwrap_or_default();
                 let updated_content = update_hosts_entry(&current_content, &machine_info.ip, &ans);
                 std::fs::write("/tmp/hosts.new", updated_content).expect("Failed to write to hosts.new");
+                if !has_sudo_privilege() {
+                    println!("\x1B[33mNote: Updating /etc/hosts requires root privileges. Sudo password prompt may appear.\x1B[0m");
+                }
                 let copy_status = std::process::Command::new("sudo")
-                    .args(["cp", "-f", "/tmp/hosts.new", "/etc/hosts"])
-                    .status()
-                    .expect("Failed to copy hosts file");
+                .args(["cp", "-f", "/tmp/hosts.new", "/etc/hosts"])
+                .status()
+                .expect("Failed to copy hosts file");
 
                 if !copy_status.success() && !is_inside_container() {
                     eprintln!("Failed to update /etc/hosts. Are you allowed to use sudo?");

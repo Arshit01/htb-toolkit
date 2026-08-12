@@ -12,16 +12,16 @@ fn read_file_contents(path: &str) -> Result<String, io::Error> {
 
 fn get_appkey_from_keyring() -> Option<String> {
     let output = Command::new("secret-tool")
-        .arg("lookup")
-        .arg("htb-api")
-        .arg("user-htb-api")
-        .output()
-        .ok()?;
-    
+    .arg("lookup")
+    .arg("htb-api")
+    .arg("user-htb-api")
+    .output()
+    .ok()?;
+
     if output.status.success() {
         let key = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string();
+        .trim()
+        .to_string();
         if !key.is_empty() {
             return Some(key);
         }
@@ -55,9 +55,9 @@ pub fn get_appkey() -> String {
     }
 
     // Fallback to config file
-    let config_path = format!("{}/.config/htb-toolkit/token", 
-        std::env::var("HOME").unwrap_or_default());
-    
+    let config_path = format!("{}/.config/htb-toolkit/token",
+                              std::env::var("HOME").unwrap_or_default());
+
     if let Ok(key) = read_file_contents(&config_path) {
         let key = key.trim().to_string();
         if !key.is_empty() {
@@ -77,11 +77,12 @@ pub fn set_appkey() {
             println!("API token not set. On the host machine, store the HTB API token in the htb-api-file and run: [docker|podman] secret create htb-api htb-api-file");
             std::process::exit(1);
         } else {
-            println!("Hack The Box API Key not set. Please, insert your App Token after the 'Password' label, it will be stored in a secure keyring.");
-            let store_command = "secret-tool";
-            let store_args = ["store", "--label='HTB API key'", "htb-api", "user-htb-api"];
+            if is_command_available("secret-tool") {
+                println!("Hack The Box API Key not set. Please, insert your App Token after the 'Password' label, it will be stored in a secure keyring.");
+                let store_command = "secret-tool";
+                let store_args = ["store", "--label='HTB API key'", "htb-api", "user-htb-api"];
 
-            let mut store_process = Command::new(store_command)
+                let mut store_process = Command::new(store_command)
                 .args(store_args)
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
@@ -89,13 +90,53 @@ pub fn set_appkey() {
                 .spawn()
                 .expect("Failed to execute secret-tool command");
 
-            let store_result = store_process.wait();
+                let store_result = store_process.wait();
 
-            if store_result.is_ok() {
-                println!("Hack The Box App Token successfully stored.");
+                if store_result.is_ok() {
+                    println!("Hack The Box App Token successfully stored.");
+                } else {
+                    eprintln!("Error storing API Key: {store_result:?}");
+                    std::process::exit(1);
+                }
             } else {
-                eprintln!("Error storing API Key: {store_result:?}");
-                std::process::exit(1);
+                println!("\x1B[33mWarning: 'secret-tool' (from libsecret-tools) is not installed.\x1B[0m");
+                println!("Falling back to file-based token storage (~/.config/htb-toolkit/token).");
+                print!("Please enter your Hack The Box App Token: ");
+                use std::io::Write;
+                std::io::stdout().flush().unwrap();
+                let mut token = String::new();
+                std::io::stdin().read_line(&mut token).expect("Failed to read token");
+                let token = token.trim();
+                if token.is_empty() {
+                    eprintln!("\x1B[31mError: App Token cannot be empty.\x1B[0m");
+                    std::process::exit(1);
+                }
+
+                let home = std::env::var("HOME").unwrap_or_default();
+                let config_dir = format!("{}/.config/htb-toolkit", home);
+                let config_path = format!("{}/token", config_dir);
+
+                if let Err(err) = std::fs::create_dir_all(&config_dir) {
+                    eprintln!("Error creating config directory: {err}");
+                    std::process::exit(1);
+                }
+
+                if let Err(err) = std::fs::write(&config_path, token) {
+                    eprintln!("Error writing token to config file: {err}");
+                    std::process::exit(1);
+                }
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(metadata) = std::fs::metadata(&config_path) {
+                        let mut perms = metadata.permissions();
+                        perms.set_mode(0o600);
+                        let _ = std::fs::set_permissions(&config_path, perms);
+                    }
+                }
+
+                println!("Hack The Box App Token successfully stored in config file.");
             }
         }
     } else {
@@ -116,19 +157,39 @@ pub fn delete_appkey() {
             println!("You are in a container. For deleting the API token on the host machine, run: [docker|podman] secret rm htb-api");
             std::process::exit(1);
         } else {
-            let clear_command = "secret-tool";
-            let clear_args = ["clear", "htb-api", "user-htb-api"];
+            let mut deleted_any = false;
 
-            let clear_output = Command::new(clear_command)
+            if is_command_available("secret-tool") {
+                let clear_command = "secret-tool";
+                let clear_args = ["clear", "htb-api", "user-htb-api"];
+
+                let clear_output = Command::new(clear_command)
                 .args(clear_args)
                 .output()
                 .expect("Failed to execute secret-tool command");
 
-            if clear_output.status.success() {
-                println!("Hack The Box API Key successfully deleted.");
-            } else {
-                let error_output = String::from_utf8_lossy(&clear_output.stderr);
-                eprintln!("Error deleting API Key:\n{error_output}");
+                if clear_output.status.success() {
+                    println!("Hack The Box API Key successfully deleted from keyring.");
+                    deleted_any = true;
+                } else {
+                    let error_output = String::from_utf8_lossy(&clear_output.stderr);
+                    eprintln!("Error deleting API Key from keyring:\n{error_output}");
+                }
+            }
+
+            let config_path = format!("{}/.config/htb-toolkit/token",
+                                      std::env::var("HOME").unwrap_or_default());
+            if std::path::Path::new(&config_path).exists() {
+                if let Err(err) = std::fs::remove_file(&config_path) {
+                    eprintln!("Error deleting fallback config file: {err}");
+                } else {
+                    println!("Hack The Box API Key file successfully deleted.");
+                    deleted_any = true;
+                }
+            }
+
+            if !deleted_any {
+                println!("No API token was found to delete.");
             }
         }
     } else {

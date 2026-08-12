@@ -30,96 +30,82 @@ struct VpnAccess {
 
 async fn get_vpn_connections() -> Result<Vec<VpnAccess>, String> {
     let appkey = get_appkey();
-    let result = fetch_api_async("https://labs.hackthebox.com/api/v4/connections", &appkey).await;
+    let mut connections = Vec::new();
 
-    match result {
-        Ok(json_value) => {
-            let mut connections = Vec::new();
-            
-            if let Some(data) = json_value.get("data") {
-                // Parse lab (Machines)
-                if let Some(lab) = data.get("lab") {
-                    if let Some(true) = lab.get("can_access").and_then(|v| v.as_bool()) {
-                        let server = lab.get("assigned_server").and_then(|s| {
-                            Some(VpnServer {
-                                id: s.get("id")?.as_i64()?,
-                                friendly_name: s.get("friendly_name")?.as_str()?.to_string(),
-                                current_clients: s.get("current_clients")?.as_i64()?,
-                                location: s.get("location")?.as_str()?.to_string(),
-                            })
-                        });
-                        
-                        let location_type = lab.get("location_type_friendly")
-                            .and_then(|v| v.as_str())
-                            .ok_or("Missing location_type_friendly")?
-                            .to_string();
-                        
-                        connections.push(VpnAccess {
-                            access_type: "lab".to_string(),
-                            location_type,
-                            can_access: true,
-                            server,
-                        });
-                    }
-                }
+    let vpn_types: [(&str, &str); 3] = [
+        ("lab", "labs"),
+        ("starting_point", "starting_point"),
+        ("fortresses", "fortresses"),
+    ];
 
-                // Parse starting_point
-                if let Some(sp) = data.get("starting_point") {
-                    if let Some(true) = sp.get("can_access").and_then(|v| v.as_bool()) {
-                        let server = sp.get("assigned_server").and_then(|s| {
-                            Some(VpnServer {
-                                id: s.get("id")?.as_i64()?,
-                                friendly_name: s.get("friendly_name")?.as_str()?.to_string(),
-                                current_clients: s.get("current_clients")?.as_i64()?,
-                                location: s.get("location")?.as_str()?.to_string(),
-                            })
-                        });
-                        
-                        let location_type = sp.get("location_type_friendly")
-                            .and_then(|v| v.as_str())
-                            .ok_or("Missing location_type_friendly")?
-                            .to_string();
-                        
-                        connections.push(VpnAccess {
-                            access_type: "starting_point".to_string(),
-                            location_type,
-                            can_access: true,
-                            server,
-                        });
-                    }
-                }
+    for (access_type, product) in vpn_types {
+        let url = format!(
+            "https://labs.hackthebox.com/api/v4/connections/servers?product={}",
+            product
+        );
+        let result = fetch_api_async(&url, &appkey).await;
 
-                // Parse fortresses
-                if let Some(fort) = data.get("fortresses") {
-                    if let Some(true) = fort.get("can_access").and_then(|v| v.as_bool()) {
-                        let server = fort.get("assigned_server").and_then(|s| {
-                            Some(VpnServer {
-                                id: s.get("id")?.as_i64()?,
-                                friendly_name: s.get("friendly_name")?.as_str()?.to_string(),
-                                current_clients: s.get("current_clients")?.as_i64()?,
-                                location: s.get("location")?.as_str()?.to_string(),
-                            })
-                        });
-                        
-                        let location_type = fort.get("location_type_friendly")
+        match result {
+            Ok(json_value) => {
+                if let Some(data) = json_value.get("data") {
+                    let assigned = data.get("assigned");
+
+                    if let Some(server_value) = assigned {
+                        if !server_value.is_null() {
+                            let server = VpnServer {
+                                id: server_value
+                                .get("id")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0),
+                                friendly_name: server_value
+                                .get("friendly_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown")
+                                .to_string(),
+                                current_clients: server_value
+                                .get("current_clients")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0),
+                                location: server_value
+                                .get("location")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown")
+                                .to_string(),
+                            };
+
+                            let location_type = server_value
+                            .get("location_type_friendly")
                             .and_then(|v| v.as_str())
-                            .ok_or("Missing location_type_friendly")?
+                            .unwrap_or("Unknown")
                             .to_string();
-                        
-                        connections.push(VpnAccess {
-                            access_type: "fortresses".to_string(),
-                            location_type,
-                            can_access: true,
-                            server,
-                        });
+
+                            connections.push(VpnAccess {
+                                access_type: access_type.to_string(),
+                                             location_type,
+                                             can_access: true,
+                                             server: Some(server),
+                            });
+                        } else {
+                            connections.push(VpnAccess {
+                                access_type: access_type.to_string(),
+                                             location_type: String::new(),
+                                             can_access: false,
+                                             server: None,
+                            });
+                        }
                     }
                 }
             }
-            
-            Ok(connections)
+            Err(err) => {
+                eprintln!(
+                    "\x1B[33mWarning: Failed to fetch {} VPN connections: {:?}\x1B[0m",
+                    product, err
+                );
+            }
         }
-        Err(err) => Err(format!("API error: {:?}", err)),
     }
+
+    Ok(connections)
 }
 
 async fn vpn_type() -> Option<Vec<String>> {
@@ -129,7 +115,15 @@ async fn vpn_type() -> Option<Vec<String>> {
 
     match result.await {
         Ok(json_value) => {
-            if let Some(json_vpn) = json_value.as_array() {
+            let json_array = if json_value.is_array() {
+                json_value.as_array()
+            } else if let Some(data) = json_value.get("data") {
+                data.as_array()
+            } else {
+                None
+            };
+
+            if let Some(json_vpn) = json_array {
                 for item in json_vpn {
                     if let Some(vpntype_value) = item["type"].as_str() {
                         vpntype.push(vpntype_value.to_string());
@@ -147,7 +141,7 @@ async fn vpn_type() -> Option<Vec<String>> {
             }
         }
     }
-    
+
     if get_interface_ip("tun0").is_some() {
         Some(vpntype)
     } else {
@@ -159,7 +153,7 @@ pub async fn check_vpn(machine_spflag: bool) {
     if let Some(vpntypes) = vpn_type().await {
         let vpntypes_str = vpntypes.join(", ");
         let mut yn = String::new();
-        
+
         if vpntypes.len() > 1 {
             println!(
                 "\nThe following VPN types are already running: {vpntypes_str}. You have multiple VPNs running. The oldest one will go down automatically in some minutes."
@@ -173,7 +167,7 @@ pub async fn check_vpn(machine_spflag: bool) {
         print!("Do you want to terminate the listed VPN and connect to a different one (y/n)? ");
         io::stdout().flush().expect("Flush failed!");
         io::stdin().read_line(&mut yn).expect("Failed to read input");
-        
+
         match yn.trim() {
             "y" | "Y" => {
                 run_vpn(machine_spflag).await;
@@ -186,8 +180,17 @@ pub async fn check_vpn(machine_spflag: bool) {
 }
 
 pub async fn run_vpn(is_starting_point: bool) {
+    if !is_command_available("openvpn") {
+        eprintln!("\x1B[31mError: 'openvpn' command not found. Please install OpenVPN to connect to HTB VPN.\x1B[0m");
+        std::process::exit(1);
+    }
+
+    if !has_sudo_privilege() {
+        println!("\x1B[33mNote: Connecting to VPN requires root privileges. Sudo password prompt may appear.\x1B[0m");
+    }
+
     let appkey = get_appkey();
-    
+
     // Get available connections
     let connections = match get_vpn_connections().await {
         Ok(conns) => conns,
@@ -215,11 +218,11 @@ pub async fn run_vpn(is_starting_point: bool) {
     println!("\n{BCYAN}Available VPN Connections:{RESET}");
     for (idx, conn) in filtered.iter().enumerate() {
         if let Some(server) = &conn.server {
-            println!("{}. {} - {} ({} users)", 
-                idx + 1, 
-                conn.location_type, 
-                server.friendly_name,
-                server.current_clients
+            println!("{}. {} - {} ({} users)",
+                     idx + 1,
+                     conn.location_type,
+                     server.friendly_name,
+                     server.current_clients
             );
         }
     }
@@ -233,7 +236,7 @@ pub async fn run_vpn(is_starting_point: bool) {
         io::stdout().flush().expect("Flush failed!");
         let mut input = String::new();
         io::stdin().read_line(&mut input).expect("Failed to read line");
-        
+
         let choice: usize = input.trim().parse().unwrap_or(1);
         if choice < 1 || choice > filtered.len() {
             eprintln!("Invalid selection");
@@ -277,33 +280,33 @@ pub async fn run_vpn(is_starting_point: bool) {
 
     // Kill existing OpenVPN
     let _output = Command::new("sudo")
-        .arg("killall")
-        .arg("openvpn")
-        .output()
-        .expect("Failed to execute command");
+    .arg("killall")
+    .arg("openvpn")
+    .output()
+    .expect("Failed to execute command");
 
     // Download and start VPN
     let blocking_task = spawn(async move {
         let client = Client::new();
-        
+
         // Download OVPN file
         let ovpn_url = format!(
             "https://labs.hackthebox.com/api/v4/access/ovpnfile/{}/{}",
             server.id, vpn_tcp_flag
         );
-        
+
         let ovpn_response = client
-            .get(ovpn_url)
-            .header("Authorization", format!("Bearer {}", appkey))
-            .send()
-            .await;
+        .get(ovpn_url)
+        .header("Authorization", format!("Bearer {}", appkey))
+        .send()
+        .await;
 
         match ovpn_response {
             Ok(response) => {
                 if response.status().is_success() {
                     let ovpn_content = response.text().await.unwrap();
                     let ovpn_file_path = format!("{}/lab-vpn.ovpn", std::env::var("HOME").unwrap_or_default());
-                    
+
                     if let Err(err) = fs::write(&ovpn_file_path, ovpn_content) {
                         eprintln!("Error writing to file: {err}");
                         std::process::exit(1);
@@ -312,13 +315,13 @@ pub async fn run_vpn(is_starting_point: bool) {
                     }
 
                     let status = Command::new("sudo")
-                        .arg("openvpn")
-                        .arg("--config")
-                        .arg(ovpn_file_path)
-                        .arg("--daemon")
-                        .status()
-                        .expect("Failed to execute openvpn command");
-                        
+                    .arg("openvpn")
+                    .arg("--config")
+                    .arg(ovpn_file_path)
+                    .arg("--daemon")
+                    .status()
+                    .expect("Failed to execute openvpn command");
+
                     if status.success() {
                         println!("{BGREEN}OpenVPN started successfully{RESET}");
                     } else {
