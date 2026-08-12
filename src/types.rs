@@ -263,21 +263,21 @@ impl PlayingMachine {
                         println!("\x1B[31mSearching for a Starting Point Machine...\x1B[0m");
 
                         for index in 1..=tiers {
-                            let tier_url = format!("https://labs.hackthebox.com/api/v4/sp/tier/{index}");
+                                let tier_url = format!("https://labs.hackthebox.com/api/v5/machines?spTier={index}");
                             let sub_result = fetch_api_async(&tier_url, appkey);
                         
                             match sub_result.await {
                                 Ok(sub_json_data) => {                                
-                                    for entry in sub_json_data["data"]["machines"].as_array().unwrap().iter() {
+                                    for entry in sub_json_data["data"].as_array().unwrap().iter() {
                                         let id = entry["id"].as_u64().unwrap();
                                         let name = entry["name"].as_str().unwrap_or("Name not available");
-                                        let points = entry["static_points"].as_u64().unwrap();
+                                        let points = entry["points"].as_u64().unwrap_or(0);
                                         let os = entry["os"].as_str().unwrap_or("OS not available").to_string();
                                         let difficulty_str = entry["difficultyText"].as_str().unwrap_or("Difficulty not available").to_string();
                                         let avatar_path = entry["avatar"].as_str().unwrap_or("Avatar not available").to_string();
-                                        let user_pwn = entry["userOwn"]
+                                        let user_pwn = entry["authUserInUserOwns"]
                                             .as_bool().unwrap_or(false);
-                                        let root_pwn = entry["rootOwn"]
+                                        let root_pwn = entry["authUserInRootOwns"]
                                             .as_bool().unwrap_or(false);
                                         let sp_flag = true;
                                         let ip = String::new(); // Will be retrieved later
